@@ -49,3 +49,58 @@ SYSTEM_PROMPT = {
                         Provide factual, data-driven answers. Cite specific numbers or examples when relevant.
                         """
         }
+
+def initialize_connection():
+    """Initialize Chroma and Ollama"""
+    
+    try:
+        client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+        collection = client.get_collection('abbvie_social_media')
+
+        ollama_client = ollama.Client()
+
+        return collection, ollama_client
+    except Exception as e:
+        st.error(f"Error initializing connections: {e}")
+        st.info("Please ensure ChromaDB is running and Ollama is accessible.")
+        st.stop()
+
+def detect_intent(ollama_client, user_input):
+    """Use LLM to detect what the user wants to do: generate a tweet, press release, or ask a question about the dataset"""
+
+    intent_prompt = f"""Classify the following user input into exactly ONE of these categories:
+    - tweet: User wants to generate/create a short social media post (Twitter/X post)
+    - press_release: User want to generate/create a formal press release or announcement
+    - question: User is asking a question about data, wants information, or wants analysis based on the dataset
+
+    User input: "{user_input}"
+
+    Respond with ONLY one word: tweet, press_release, or question"""
+
+    try:
+        response = ollama_client.generate(
+            model=MODEL_NAME,
+            prompt=intent_prompt,
+            options={
+                'temperature': 0.1,
+                'max_tokens': 10
+            }
+        )
+
+        intent = response['response'].strip().lower()
+
+        if 'tweet' in intent:
+            return 'tweet'
+        elif 'press_release' in intent or 'press release' in intent:
+            return 'press_release'
+        else:
+            return 'question'
+    except Exception as e:
+        st.warning(f"Intent detection using LLM failed, using fallback method")
+        message_lower = user_input.lower()
+        if 'tweet' in message_lower or 'post' in message_lower:
+            return 'tweet'  
+        elif 'press release' in message_lower or 'announcement' in message_lower:
+            return 'press_release'
+        else:
+            return 'question'

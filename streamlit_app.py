@@ -104,3 +104,26 @@ def detect_intent(ollama_client, user_input):
             return 'press_release'
         else:
             return 'question'
+        
+
+def retrieve_relevant_content(collection, query, content_type=None, n_results=5):
+    """Retrieve relevant content from Chroma"""
+
+    try:
+        where_filter = {}
+        if content_type == 'tweet':
+            where_filter = {'content_type': 'tweet'}
+        elif content_type == 'press_release':
+            where_filter = {'content_type': 'press_release'}
+        
+        results = collection.query(
+            query_texts=[query],
+            n_results=n_results,
+            where_filter=where_filter if where_filter else None
+        )
+        return results
+    except Exception as e:
+        st.error(f"Error retrieving content from ChromaDB: {e}")
+        return None
+
+def generate_response(ollama_client, intent, user_message, retrieved_context)

@@ -370,3 +370,113 @@ def generate_response(ollama_client, intent, user_input, retrieved_context):
         return f"Error generating response: {e}"
     
 def main():
+    st.set_page_config(
+        page_title='AbbVie Social Media Content Generator',
+        layout="wide"
+    )
+
+    collection, ollama_client, unique_topics, unique_audiences = initialize_connection()
+
+    st.title("AbbVie Social Media Content Generator")
+    st.markdown("""
+                Ask me to:
+                - **Generate a tweet** (e.g. "Write a tweet about clinical trial diversity")
+                - **Generate a press release** (e.g. "Write a press release announcing new research results")
+                - **Answer questions about AbbVie's social media content** (e.g. "What tweets have the highest engagement?")
+                
+                """)
+    
+    if 'message' not in st.session_state:
+        st.session_state.messages = []
+    
+    # Display chat history
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+            if "metadata" in message and message["metadata"]:
+                meta = message["metadata"]
+                if meta.get("intent") == "tweet":
+                    char_count = len(message["content"])
+                    if char_count <= 280:
+                        st.caption(f"{char_count}/280 characters")
+                    else:
+                        st.caption(f"{char_count}/280 characters (exceeds limit!)")
+                
+                if meta.get("filtered_topics") or meta.get("filtered_audiences"):
+                    st.caption(f"Filtered by topics: {meta.get('filtered_topics', [])} and audiences: {meta.get('filtered_audiences', [])}")
+    
+    if prompt := st.chat_input("Ask a question or request content generation..."):
+        st.session_start.messages.append({"role": "user", "content": prompt})
+
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                intent = detect_intent(ollama_client, prompt)
+                retrieved_context, filtered_topics, filtered_audiences = use_tool_calling(
+                    ollama_client, 
+                    collection, 
+                    prompt, 
+                    intent, 
+                    unique_topics, 
+                    unique_audiences
+                )
+
+                if retrieved_context and retrieved_context['documents'][0]:
+                    response = generate_response(ollama_client, intent, prompt, retrieved_context)
+                    st.markdown(response)
+
+                    metadata = {
+                        "intent": intent,
+                        "filtered_topics": filtered_topics,
+                        "filtered_audiences": filtered_audiences
+                    }
+
+                    st.session_state.messages.append({
+                        "role": "assistant", 
+                        "content": response, 
+                        "metadata": metadata
+                    })
+
+                    if intent == "tweet":
+                        char_count = len(message["content"])
+                        if char_count <= 280:
+                            st.caption(f"{char_count}/280 characters")
+                        else:
+                            st.caption(f"{char_count}/280 characters (exceeds limit!)")
+
+                    if filtered_topics or filtered_audiences:
+                        st.caption(f"Filtered by topics: {filtered_topics} and audiences: {filtered_audiences}")
+
+                else:
+                    error = "Sorry, I couldn't retrieve relevant information from the database."
+                    st.error(error)
+                    st.session_state.messages.append({"role": "assistant", "content": error})
+
+    # Additional Information
+    with st.sidebar:
+        st.header("About")
+        st.markdown(f"""
+                    **Model:** {MODEL_NAME}
+
+                    **Database:** {collection.count()} documents
+
+                    **Common topics:**
+                    {chr(10).join(f'- {t}' for t in unique_topics)}
+
+                    **Common audiences to target:**
+                    {chr(10).join(f'- {a}' for a in unique_audiences)}
+                    """)
+        
+        st.markdown("---")
+
+        if st.button("Clear Chat"):
+            st.session_state.messages = []
+            st.rerun()
+
+        st.markdown("---")
+
+if __name__ == "__main__":
+    main()

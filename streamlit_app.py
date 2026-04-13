@@ -50,6 +50,26 @@ SYSTEM_PROMPT = {
                         """
         }
 
+@st.cache_data
+def get_unique_topics_and_audiences(_collection):
+    """Get all unique topics and audiences from database"""
+    try:
+        all_docs = _collection.get(limit=1500)
+        topics = set()
+        audiences = set()
+
+        for metadata in all_docs['metadatas']:
+            if metadata.get('topics'):
+                topic_list = [t.strip() for t in metadata['topics'].split(',')]
+                topics.update(topic_list)
+            if metadata.get('audiences'):
+                audiences.add(metadata['audiences'])
+        
+        return sorted(list(topics)), sorted(list(audiences))
+    except Exception as e:
+        return [], []
+
+
 def initialize_connection():
     """Initialize Chroma and Ollama"""
     

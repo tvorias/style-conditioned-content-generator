@@ -304,24 +304,69 @@ def use_tool_calling(ollama_client, collection, user_input, intent, unique_topic
         return None, [], []
 
 
-def retrieve_relevant_content(collection, query, content_type=None, n_results=5):
-    """Retrieve relevant content from Chroma"""
+def generate_response(ollama_client, intent, user_input, retrieved_context):
+    """Generate final response using retrieved context"""
+
+    system_promt = SYSTEM_PROMPT.get(intent, SYSTEM_PROMPT['question'])
+
+    if intent in ['tweet', 'press_release']:
+        context_str = "\n\n---\n\n".join([
+            f"Example {i+1}:\n{doc[:500]}"
+            for i, doc in enumerate(retrieved_context['documents'][0][:10])
+        ])
+
+        full_prompt = f"""{system_promt}
+
+        Here are examples of AbbVie's style:
+        {context_str}
+
+        User request: "{user_input}"
+
+        Generated content:"""
+
+    else:
+        context_parts = []
+
+        for i, (doc, meta) in enumerate(zip(retrieved_context['documents'][0][:10], 
+                                            retrieved_context['metadatas'][0][:10])):
+            content_type = meta.get('content_type', 'unknown')
+
+            if content_type == 'tweet':
+                context_parts.append(
+                    f"Tweet {i+1}:\n"
+                    f"Date: {meta.get('date', 'N/A')}, Topics: {meta.get('topics', 'N/A')}, "
+                    f"Audience: {meta.get('audiences', 'N/A')}, "
+                    f"Engagement: {meta.get('total_engagement', 0)} "
+                    f"(likes: {meta.get('likes', 0)}, shares: {meta.get('shares', 0)}, comments: {meta.get('comments', 0)})\n"
+                    f"Text: {doc[:500]}"
+                )
+            else:
+                context_parts.append(
+                    f"Press Release {i+1}:\n"
+                    f"Title: {meta.get('title', 'N/A')}, Date: {meta.get('date', 'N/A')}, "
+                    f"Topics: {meta.get('topics', 'N/A')}, Audience: {meta.get('audiences', 'N/A')}\n"
+                    f"Text: {doc[:1000]}"
+                )
+            
+        context_str = "\n\n".join(context_parts)
+        full_prompt = f"""{system_promt}
+
+        Database context:
+        {context_str}
+
+        User question: {user_input}
+        Answer:"""
 
     try:
-        where_filter = {}
-        if content_type == 'tweet':
-            where_filter = {'content_type': 'tweet'}
-        elif content_type == 'press_release':
-            where_filter = {'content_type': 'press_release'}
-        
-        results = collection.query(
-            query_texts=[query],
-            n_results=n_results,
-            where_filter=where_filter if where_filter else None
+        response = ollama_client.generate(
+            model=MODEL_NAME,
+            prompt=full_prompt,
+            options={'temperature': 0.2,
+                     'top_p': 0.9,}
         )
-        return results
-    except Exception as e:
-        st.error(f"Error retrieving content from ChromaDB: {e}")
-        return None
 
-def generate_response(ollama_client, intent, user_message, retrieved_context)
+        return response['response'].strip()
+    except Exception as e:
+        return f"Error generating response: {e}"
+    
+def main():

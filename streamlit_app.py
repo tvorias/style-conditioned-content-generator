@@ -5,6 +5,7 @@ import streamlit as st
 import chromadb
 import ollama
 from datetime import datetime
+import json
 
 # Configuration
 CHROMA_DB_PATH = './chroma_db'
@@ -224,6 +225,84 @@ def detect_intent(ollama_client, user_input):
         else:
             return 'question'
         
+def use_tool_calling(ollama_client, collection, user_input, intent, unique_topics, unique_audiences):
+    """Use LLM with tool calling to filter database and generate response."""
+    
+    content_type = 'tweet' if intent == 'tweet' else 'press_release' if intent == 'press_release' else 'any'
+
+    tool_prompt = f"""You are an AI assistant that can filter the AbbVie social media database to find relevant examples based on topics and audiences.
+
+        User request: "{user_input}"
+        
+        Available topics in database
+        {', '.join(unique_topics)}
+
+        Available audiences in database:
+        {', '.join(unique_audiences)}
+
+        You have access to a tool called "filter_database" that can filter content by topics and audiences.
+
+        Task:
+        1. Determine which topics and audience are relevant to the user's request
+        2. Call the filter_database tool with appropriate parameters
+        3. Use the retrieved content to fulfill the user's request
+
+        To call the tool, respond in this JSON format:
+        {{
+            "tool": "filter_database",
+            "parameters": {{
+                "topics": [list of relevant topics from database],
+                "audience": [relevant audience from database],
+                "content_type": "{content_type}"
+            }}
+        }}
+
+        If no specific topics/audiences are relevant, use empty arrays: "topics": [], "audience": []"""
+    
+    try:
+        response = ollama_client.generate(
+            model=MODEL_NAME,
+            prompt=tool_prompt,
+            options={'temperature': 0.2}
+        )
+
+        response_text = response['response'].strip()
+
+        # Attempt to parse the response as JSON
+        try:
+            json_start = response_text.find('{')
+            json_end  = response_text.rfind('}') + 1
+
+            if json_start >= 0 and json_end > json_start:
+                json_str = response_text[json_start:json_end]
+                tool_call = json.loads(json_str)
+
+                params = tool_call.get('parameters', {})
+                topics = params.get('topics', [])
+                audiences = params.get('audience', [])
+
+                st.info(f"LLM identified relevant topics: {topics} and audiences: {audiences}")
+
+                filtered_results  = filter_database_tool(
+                    collection, 
+                    topics=topics if topics else None, 
+                    audiences=audiences if audiences else None, 
+                    content_type=content_type,
+                    n_results=100
+                )
+
+                return filtered_results, topics, audiences
+            
+        except json.JSONDecodeError:
+            st.warning("LLM response could not be parsed as JSON, using default retrieval without filters")
+            
+        filtered_results = filter_database_tool(collection, content_type=content_type, n_results=100) 
+        return filtered_results, [], []
+    
+    except Exception as e:
+        st.error(f"Error during tool calling: {e}")
+        return None, [], []
+
 
 def retrieve_relevant_content(collection, query, content_type=None, n_results=5):
     """Retrieve relevant content from Chroma"""

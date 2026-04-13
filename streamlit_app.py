@@ -50,6 +50,32 @@ SYSTEM_PROMPT = {
                         """
         }
 
+FILTER_DATABASE_TOOL = {
+    "name": "filter_database",
+    "description": "Filter the AbbVie social media database by topics and/or audiences to get relevant examples. Use this when you find content about specific topics or for specific audiences.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "topics": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of topics to filter by (eg. ['clinical trial', 'research & publications'])"
+            },
+            "audience": {
+                "type": "array",
+                "items": {'type': 'string'},
+                "description": "List of audiences to filter by (e.g., ['patients/caregivers', 'investor'])"
+            },
+            "content_type": {
+                "type": "string",
+                "enum": ["tweet", "press_release", "any"],
+                "description": "Type of content to retrieve"
+            }
+        },
+        "required": []
+    }
+}
+
 @st.cache_data
 def get_unique_topics_and_audiences(_collection):
     """Get all unique topics and audiences from database"""
@@ -79,11 +105,84 @@ def initialize_connection():
 
         ollama_client = ollama.Client()
 
-        return collection, ollama_client
+        # Get unique topics and audiences 
+        unique_topics, unique_audiences = get_unique_topics_and_audiences(collection)
+
+        return collection, ollama_client, unique_topics, unique_audiences
     except Exception as e:
         st.error(f"Error initializing connections: {e}")
         st.info("Please ensure ChromaDB is running and Ollama is accessible.")
         st.stop()
+
+def filter_database_tool(collection, topics=None, audiences=None, content_type="any", n_results=100):
+    """Tool function to filter database by topics and audiences"""
+    try:
+        where_filter_base = {}
+
+        if content_type == "tweet":
+            where_filter_base = {"content_type": "tweet"}
+        elif content_type == "press_release":
+            where_filter_base = {"content_type": "press_release"}
+
+        # retrieve relevant documents based on base filter
+        all_docs = collection.get(
+            limit=1500, 
+            where=where_filter_base if where_filter_base else None
+            )
+        
+        filtered_indices = []
+        for i, metadata in enumerate(all_docs['metadatas']):
+            match = False
+
+            if topics:
+                db_topics = [t.strip().lower() for t in metadata.get('topics', '').split(',')]
+                
+                # Check if any of the provided topics match the document's topics
+                if any(req_topic.lower() in db_topics for req_topic in topics):
+                    match = True
+
+            if audiences:
+                db_audience = metadata.get('audiences', '').strip().lower()
+                if db_audience in audiences:
+                    match = True
+
+            # If no filters specified, include all documents
+            if not topics and not audiences:
+                match = True
+
+            if match:
+                filtered_indices.append(i)
+            
+            # Get filtered results
+        if filtered_indices:
+            filtered_docs = [all_docs['documents'][i] for i in filtered_indices[:n_results]]
+            filtered_metas = [all_docs['metadatas'][i] for i in filtered_indices[:n_results]]
+            filtered_ids = [all_docs['ids'][i] for i in filtered_indices[:n_results]]
+
+            results = {
+                'documents': [filtered_docs],
+                'metadatas': [filtered_metas],
+                'ids': [filtered_ids]
+            }
+        else:
+            results = collection.get(
+                limit=n_results, 
+                where=where_filter_base if where_filter_base else None
+            )
+
+            if results and results['documents']:
+                results = {
+                    'documents': [results['documents']],
+                    'metadatas': [results['metadatas']],
+                    'ids': [results['ids']]
+                }
+            
+        return results
+        
+    except Exception as e:
+        st.error(f"Error in filter_database_tool: {e}")
+        return None
+
 
 def detect_intent(ollama_client, user_input):
     """Use LLM to detect what the user wants to do: generate a tweet, press release, or ask a question about the dataset"""

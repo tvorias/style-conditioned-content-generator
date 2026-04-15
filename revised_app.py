@@ -48,19 +48,8 @@ Write a press release opening (2-3 paragraphs) that:
 - Uses professional medical terminology
 
 Write the press release opening ONLY, nothing else.
-        """,
-
-        'question': """You are a helpful data analyst.
-
-Answer questions about AbbVie's social media dataset clearly and concisely.
-
-The dataset contains:
-- Press releases: titles, dates, topics, audiences, full text
-- Tweets: text, dates, topics, audiences, engagement (likes, shares, comments)
-
-Provide factual, data-driven answers. Cite specific numbers or examples when relevant. If you do not know the answer, do not guess.
-"""
-        }
+        """
+}
 
 @st.cache_resource
 def initialize_sql_db():
@@ -203,4 +192,27 @@ Generate content:"""
     except Exception as e:
         return "Error generating content: {e}"
     
-    
+def answer_question(sql_agent, user_input):
+    """Answer analytical questions using SQL agent"""
+
+    try:
+        prompt = f"""Answer this question about AbbVie's social media data:
+
+"{user_input}"
+
+Database schema:
+- tweets table: id, date, text, link, likes, shares, comments, total_engagement, topics, audience, content_type
+- press_releases table: id, title, date, text, link, topics, audience, content_type
+
+Use SQL queries to find the answer. Be specific and include relevant details. If you don't know the answer, DO NOT make up answers.answer_question
+"""
+        response = sql_agent.invoke(prompt)
+
+        if isinstance(response, dict) and 'output' in response:
+            return response['output']
+        else:
+            return str(response)
+        
+    except Exception as e:
+        return f"Error querying database: {e}"
+

@@ -153,3 +153,54 @@ def detect_intent(ollama_client, user_input):
     except Exception as e:
         return 'question'
 
+
+def generate_content(collection, ollama_client, intent, user_input):
+    """Generate content using semantic search with Chromadb for style examples"""
+
+    system_prompt = SYSTEM_PROMPTS[intent]
+
+    # Apply content_filter so only relevant examples are pulled
+    try:
+        results = collection.query(
+            query_texts=[user_input],
+            where={"content_type": intent},
+            n_results=10
+        )
+
+        if not results or not results['documents'] or not results['documents'][0]:
+            st.warning(f"No {intent} examples found")
+            return f"Sorry, I couldn't find relevant {'tweets' if intent == 'tweet' else 'press releases'} examples to learn from"
+        
+        
+        # Build content from retrieved examples
+        examples = []
+        for i, doc in enumerate(results['documents'][0][:15]):
+            examples.append(f"Example {i+1}: \n{doc[:750]}")
+
+        context_str = "\n\n---\n\n".join(examples)
+
+        full_prompt = f"""{system_prompt}
+
+Here are examples of AbbVie's style for {'tweets' if intent == 'tweet' else 'press releases'}
+
+{context_str}
+
+User request: {user_input}
+
+Generate content:"""
+        
+        response = ollama_client.generate(
+            model=CONTENT_MODEL,
+            prompt=full_prompt,
+            options={
+                'temperature': 0.5,
+                'top_p': 0.9
+            }
+        )
+
+        return response['response']
+    
+    except Exception as e:
+        return "Error generating content: {e}"
+    
+    

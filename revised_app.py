@@ -62,3 +62,37 @@ Provide factual, data-driven answers. Cite specific numbers or examples when rel
 """
         }
 
+@st.cache_resource
+def initialize_sql_db():
+    """Create SQLite database from cleaned data if it doesn't already exist"""
+
+    db_path = Path(SQL_DB_PATH)
+
+    if db_path.exists():
+        return SQLDatabase.from_uri(f"sqlite:///{SQL_DB_PATH}")
+    
+    # Load cleaned Excel data
+    xls = pd.ExcelFile(EXCEL_FILE)
+    df_pr = pd.read_excel(xls, 'Press releases')
+    df_tw = pd.read_excel(xls, 'Twitter')
+
+    # Standardize column and clean names
+    df_pr.columns = [col.strip().lower().replace(' ', '_') for col in df_pr.columns]
+    df_tw.columns = [col.strip().lower().replace(' ', '_') for col in df_tw.columns]
+
+    df_pr = df_pr.rename(columns={'verbatim': 'text'})
+    df_tw = df_tw.rename(columns={'post_copy': 'text'})
+
+    df_pr['content_type'] = 'press_release'
+    df_tw['content_type'] = 'tweet'
+
+
+    # Create db
+    conn = sqlite3.connect(SQL_DB_PATH)
+
+    df_pr.to_sql('press_release', conn, if_exists='replace', index=False)
+    df_tw.to_sql('tweets', conn, if_exists='replace', index=False)
+
+    conn.close()
+
+    return SQLDatabase.from_uri(f"sqlite:///{SQL_DB_PATH}")

@@ -111,6 +111,10 @@ def initialize_connections():
 
         return collection, ollama_client, sql_agent
     
+    except Exception as e:
+        st.error(f"Error initializing connextions: {e}")
+        st.stop()
+    
 def detect_intent(ollama_client, user_input):
     """Detect if user want to do content generation or has a question about the data"""
 
@@ -215,4 +219,75 @@ Use SQL queries to find the answer. Be specific and include relevant details. If
         
     except Exception as e:
         return f"Error querying database: {e}"
+    
+def main():
+    st.set_page_config(
+        page_title="AbbVie Content Generator",
+        layout="wide"
+    )
+
+    collection, ollama_client, sql_agent = initialize_connections()
+
+    st.title("AbbVie Social Media Content Generator and Chatbot")
+    st.markdown("""
+    Ask me to:
+    - **Generate a tweet** (e.g. "Write a tweet about clinical trial diversity")
+    - **Generate a press release** (e.g. "Write a press release announcing new research results")
+    - **Answer questions about AbbVie's social media content** (e.g. "What tweets have the highest engagement?")
+                """)
+    
+    # Begin chat history
+    if 'messages' not in st.session_state:
+        st.session_state.messages = []
+
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    
+    if prompt := st.chat_input("Ask a question or request content generation...")
+        st.session_state.messages.append({'role': 'user', 'content': prompt})
+
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+
+                intent = detect_intent(ollama_client, prompt)
+
+                if intent in ['tweet', 'press_release']:
+                    st.caption(f"Using semantic search to find {'tweet' if intent == 'tweet' else 'press release'} examples")
+                    
+                    response = generate_content(
+                        collection,
+                        ollama_client,
+                        intent,
+                        prompt
+                    )
+
+                else:
+                    # If not content generation, proceed to answer question
+                    st.caption("Querying database...")
+                    
+                    response = answer_question(sql_agent, prompt)
+
+                st.markdown(response)
+
+                metadata = {'intent': intent}
+
+                st.session_state.messages.append({
+                    "role": 'assistant',
+                    "content": response,
+                    "metadata": metadata
+                })
+
+    
+    # add side bar with clear button
+    with st.sidebar:
+        if st.button('Clear Chat'):
+            st.session_state.message = []
+            st.rerun()
+
+if __name__ == '__main__':
+    main()
+
+
 

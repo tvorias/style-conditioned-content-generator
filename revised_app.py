@@ -96,3 +96,30 @@ def initialize_sql_db():
     conn.close()
 
     return SQLDatabase.from_uri(f"sqlite:///{SQL_DB_PATH}")
+
+@st.cache_resource
+def initialize_connections():
+    """Initialize ChromaDb, Ollama, and SQL db"""
+
+    try:
+        chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+        collection = chroma_client.get_collection('abbvie_social_media')
+
+        ollama_client = ollama.Client()
+
+        sql_db = initialize_sql_db()
+
+        # LangChain Ollama LLM for SQL questies
+        sql_llm = Ollama(model=SQL_MODEL, temperature=0)
+
+        sql_agent = create_sql_agent(
+            llm=sql_llm,
+            db=sql_db,
+            agent_type="openai-tools",
+            verbose=True,
+            handle_parsing_errors=True
+        )
+
+        return collection, ollama_client, sql_agent
+    
+    

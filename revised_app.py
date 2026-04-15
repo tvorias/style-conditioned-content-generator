@@ -245,7 +245,7 @@ def main():
             st.markdown(message["content"])
 
     
-    if prompt := st.chat_input("Ask a question or request content generation...")
+    if prompt := st.chat_input("Ask a question or request content generation..."):
         st.session_state.messages.append({'role': 'user', 'content': prompt})
 
         with st.chat_message("assistant"):

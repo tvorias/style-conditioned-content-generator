@@ -22,7 +22,7 @@ CONTENT_MODEL = 'qwen2.5:14b'
 # Database paths
 CHROMA_DB_PATH = './chroma_db'
 SQL_DB_PATH = './abbvie_data.db'
-EXCEL_FILE = 'ref/AbbVie AI Data Collection_cleaned.xlsx'
+EXCEL_FILE = 'AbbVie_AI_Data_Collection_cleaned.xlsx'
 
 # System prompt to guide chatbot behavior based on type of text user wants generated
 SYSTEM_PROMPTS = {

@@ -122,4 +122,34 @@ def initialize_connections():
 
         return collection, ollama_client, sql_agent
     
+def detect_intent(ollama_client, user_input):
+    """Detect if user want to do content generation or has a question about the data"""
+
+    intent_prompt = f"""Classify the following user input into exactly ONE of these categories:
+    - tweet: User wants to generate/create a short social media post (Twitter/X post)
+    - press_release: User wants to generate/create a formal press release or announcement
+    - question: User is asking a question about data, wants information, or wants analysis based on the dataset
+
+    User input: "{user_input}"
+
+    Respond with ONLY one word: tweet, press_release, or question"""
+
+    try:
+        response = ollama_client.generate(
+            model=INTENT_MODEL,
+            prompt=intent_prompt,
+            options={'temperature': 0.1, 'max_tokens': 10}
+        )
+
+        intent = response['response'].strip().lower()
+
+        if 'tweet' in intent:
+            return 'tweet'
+        elif 'press_release' in intent or 'press release' in intent:
+            return 'press_release'
+        else:
+            return 'question'
     
+    except Exception as e:
+        return 'question'
+

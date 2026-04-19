@@ -64,7 +64,7 @@ The app uses a **hybrid intelligent routing system:**
                                                   Tweet/Press Release -> Semantic Search (ChromaDB) -> Content generation (llama3.1:8b) -> generated content
 User Input -> Intent Detection (llama3.1:8b) ->
                                                   Question -> SQL Generation (deepseek-coder:6.7b) -> Query Execution (SQLite) -> Formatted Answer
-
+```
 
 ### Core Components
 

@@ -9,14 +9,12 @@ import ollama
 import sqlite3
 import pandas as pd
 from pathlib import Path
-from langchain_community.utilities import SQLDatabase 
-from langchain_community.agent_toolkits import create_sql_agent
-from langchain_community.llms.ollama import Ollama
+
 
 # Model selection for different tasks
 INTENT_MODEL = 'llama3.1:8b'
 SQL_MODEL = 'deepseek-coder:6.7b'
-CONTENT_MODEL = 'qwen2.5:14b'
+CONTENT_MODEL = 'llama3.1:8b'  # 'qwen2.5:14b'
 
 
 # Database paths
@@ -58,8 +56,23 @@ def initialize_sql_db():
     db_path = Path(SQL_DB_PATH)
 
     if db_path.exists():
-        return SQLDatabase.from_uri(f"sqlite:///{SQL_DB_PATH}")
-    
+        try:
+            conn = sqlite3.connect(SQL_DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table AND name='documents'")
+            has_documents = cursor.fetchone() is not None
+            conn.close()
+
+            if has_documents:
+                return True
+            
+            st.warning("Old database schema. Recreating...")
+            db_path.unlink()
+        except Exception:
+            if db_path.exists():
+                db_path.unlink()
+
+
     # Load cleaned Excel data
     xls = pd.ExcelFile(EXCEL_FILE)
     df_pr = pd.read_excel(xls, 'Press releases')
@@ -75,20 +88,37 @@ def initialize_sql_db():
     df_pr['content_type'] = 'press_release'
     df_tw['content_type'] = 'tweet'
 
+    if 'total_engagement' not in df_tw.columns:
+        df_tw['total_engagement'] = df_tw['likes'].fillna(0) + df_tw['shares'].fillna(0) + df_tw['comments'].fillna(0)
+
+    df_pr['likes'] = None
+    df_pr['shares'] = None
+    df_pr['comments'] = None
+    df_pr['total_engagement'] = None
+
+    df_tw['title'] = None
+
+    common_columns = ['content_type', 'title', 'text', 'link', 'likes', 'shares', 'comments',
+                      'total_engagement', 'topics', 'audience']
+    
+    df_combined = pd.concat([
+        df_pr[common_columns], 
+        df_tw[common_columns]
+    ], ignore_index=True)
+
 
     # Create db
     conn = sqlite3.connect(SQL_DB_PATH)
 
-    df_pr.to_sql('press_release', conn, if_exists='replace', index=False)
-    df_tw.to_sql('tweets', conn, if_exists='replace', index=False)
+    df_combined.to_sql('documents', conn, if_exists='replace', index=False)
 
     conn.close()
 
-    return SQLDatabase.from_uri(f"sqlite:///{SQL_DB_PATH}")
+    return True
 
 @st.cache_resource
 def initialize_connections():
-    """Initialize ChromaDb, Ollama, and SQL db"""
+    """Initialize ChromaDb, Ollama"""
 
     try:
         chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
@@ -96,23 +126,12 @@ def initialize_connections():
 
         ollama_client = ollama.Client()
 
-        sql_db = initialize_sql_db()
+        initialize_sql_db()
 
-        # LangChain Ollama LLM for SQL questies
-        sql_llm = Ollama(model=SQL_MODEL, temperature=0)
-
-        sql_agent = create_sql_agent(
-            llm=sql_llm,
-            db=sql_db,
-            agent_type="openai-tools",
-            verbose=True,
-            handle_parsing_errors=True
-        )
-
-        return collection, ollama_client, sql_agent
+        return collection, ollama_client
     
     except Exception as e:
-        st.error(f"Error initializing connextions: {e}")
+        st.error(f"Error initializing connections: {e}")
         st.stop()
     
 def detect_intent(ollama_client, user_input):
@@ -156,8 +175,8 @@ def generate_content(collection, ollama_client, intent, user_input):
     try:
         results = collection.query(
             query_texts=[user_input],
-            where={"content_type": intent},
-            n_results=10
+            where={"content_type": intent} #,
+            # n_results=10
         )
 
         if not results or not results['documents'] or not results['documents'][0]:
@@ -186,7 +205,7 @@ Generate content:"""
             model=CONTENT_MODEL,
             prompt=full_prompt,
             options={
-                'temperature': 0.5,
+                'temperature': 0.3,
                 'top_p': 0.9
             }
         )
@@ -196,29 +215,111 @@ Generate content:"""
     except Exception as e:
         return "Error generating content: {e}"
     
-def answer_question(sql_agent, user_input):
+def answer_question(ollama_client, user_input):
     """Answer analytical questions using SQL agent"""
 
     try:
-        prompt = f"""Answer this question about AbbVie's social media data:
+        prompt = f"""You are a SQL expert. Generate a SQLite query to answer this question:
 
-"{user_input}"
+Question: "{user_input}"
 
 Database schema:
-- tweets table: id, date, text, link, likes, shares, comments, total_engagement, topics, audience, content_type
-- press_releases table: id, title, date, text, link, topics, audience, content_type
+- Table: documents
+- columns:
+    * content_type (TEXT): 'tweet' or 'press_release'
+    * date (TEXT): publication date
+    * title (TEXT): press release title (NULL for tweets)
+    * text (TEXT): content (tweet text or press release body)
+    * link (TEXT): URL
+    * likes (INTEGER): number of likes (NULL for press releases)
+    * shares (INTEGER): number of shares (NULL for press releases)
+    * comments (INTEGER): number of comments (NULL for press releases)
+    * total_engagement (INTEGER): sum of engagement metrics (NULL for press releases)
+    * topics (TEXT): PRE-CATEGORIZED comma-separated topic tags - USE THIS for "about" queries
+    * audience (TEXT): target audience
 
-Use SQL queries to find the answer. Be specific and include relevant details. If you don't know the answer, DO NOT make up answers.answer_question
+Important:
+- "COUNT(*) FROM documents" should only be used when getting counts or percentages of ALL documents
+- "document" means 'tweet' AND 'press_release'
+- Use 'WHERE content_type = 'tweet'" ONLY when you need to filter tweets
+- Use 'WHERE content_type = 'press_release'" ONLY when you need to filter press releases
+- For percentages, the content_filter MUST be the same for calculating the numerator and denominator. There should never be two separate values of WHERE content_filter = X
+- Example: "What percent of press releases are about patents?" -> SELECT (*) * 100 / (SELECT COUNT(*) FROM documents WHERE content_filter = "press_release") FROM documents WHERE content_type = "press_release" AND topics LIKE '%patents%'
+- To count all documents: SELECT COUNT(*) FROM documents
+- Use LIKE for text matching (e.g., topics LIKE '%clinical trial%', text LIKE '%cancer%')
+- When users asks "about [topic]" -> search the topics and text fields
+- Example: "How many about patents?" -> WHERE topics LIKE '%patents%'
+- To count tweets: SELECT COUNT(*) FROM documents WHERE content_type = 'tweet'
+- For engagement metrics, always filter tweets only
+- Limit results to 10 unless user asks for more
+
+Respond with ONLY the SQL query, no explanations, no markdown formatting.
 """
-        response = sql_agent.invoke(prompt)
+        sql_response = ollama_client.generate(
+            model=SQL_MODEL,
+            prompt=prompt,
+            options={'temperature': 0, 'max_tokens': 200}
+        )
 
-        if isinstance(response, dict) and 'output' in response:
-            return response['output']
-        else:
-            return str(response)
+        sql_query = sql_response['response'].strip()
+
+        sql_query = sql_query.replace('```sql', '').replace('```', '').strip()
+
+        sql_query = sql_query.rstrip(';')
+
+        # Display SQL query
+        with st.expander("Generated SQL query:", expanded=False):
+            st.code(sql_query, language='sql')
+
+        conn = sqlite3.connect(SQL_DB_PATH)
+        cursor = conn.cursor()
+
+        cursor.execute(sql_query)
+        results = cursor.fetchall()
+        column_names = [description[0] for description in cursor.description] if cursor.description else []
         
+        conn.close()
+
+        # Format the results
+        if not results:
+            return "No results found for your query"
+    
+        if len(results) == 1 and len(results[0]) == 1 and column_names[0].lower().startswith('count'):
+            count = results[0][0]
+            return f"There are {count} documents matching your query"
+        
+        if len(results) <= 10:
+            results_text = ""
+            for row in results:
+                row_dict = dict(zip(column_names, row))
+                results_text += f"\n- {row_dict}"
+
+            
+            interpretation_prompt = f"""User asked: "{user_input}
+
+Query results:
+{results_text}
+
+Format this as a clear, concise answer. Include specific numbers and details."""
+            
+            answer_response = ollama_client.generate(
+                model=CONTENT_MODEL,
+                prompt=interpretation_prompt,
+                options={'temperature': 0.3, 'max_tokens': 400}
+            )
+
+            return answer_response['response']
+        else:
+            return f"Found {len(results)} results. Top 10:\n" + "\n".join([str(dict(zip(column_names, row))) for row in results[:10]])
+
+        
+    except sqlite3.Error as e:
+        error_message = f"SQL execution error: {e}"
+        if 'no such table' in str(e).lower():
+            error_message += "\n\nDatabase may need to be recreated"
+        return error_message
     except Exception as e:
-        return f"Error querying database: {e}"
+        return f"Error processing query: {e}"
     
 def main():
     st.set_page_config(
@@ -226,7 +327,7 @@ def main():
         layout="wide"
     )
 
-    collection, ollama_client, sql_agent = initialize_connections()
+    collection, ollama_client = initialize_connections()
 
     st.title("AbbVie Social Media Content Generator and Chatbot")
     st.markdown("""
@@ -244,8 +345,15 @@ def main():
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
+    # Check if demo prompt was clicked
+    if 'example_prompt' in st.session_state:
+        prompt = st.session_state.example_prompt
+        del st.session_state.example_prompt
+    else:
+        prompt = st.chat_input("Ask a question or request content generation...")
+
     
-    if prompt := st.chat_input("Ask a question or request content generation..."):
+    if prompt:
         st.session_state.messages.append({'role': 'user', 'content': prompt})
 
         with st.chat_message("assistant"):
@@ -267,7 +375,7 @@ def main():
                     # If not content generation, proceed to answer question
                     st.caption("Querying database...")
                     
-                    response = answer_question(sql_agent, prompt)
+                    response = answer_question(ollama_client, prompt)
 
                 st.markdown(response)
 
@@ -282,8 +390,51 @@ def main():
     
     # add side bar with clear button
     with st.sidebar:
-        if st.button('Clear Chat'):
+        st.markdown("---")
+        
+        # section for example prompts for demo
+        st.header("Example Prompts")
+        st.caption("Click to try these examples")
+
+        st.subheader("Analytic Questions")
+        if st.button("Prevalence of press releases about patents", use_container_width=True):
+            st.session_state.example_prompt = "What percent of press releases are about patents?"
+            st.rerun()
+
+        if st.button("Top 5 tweets about cancer by total engagement", use_container_width=True):
+            st.session_state.example_prompt = 'What are the top 5 tweets about cancer by total engagement?'
+            st.rerun()
+        
+        if st.button("Average engagement for tweets about clinical trials", use_container_width=True):
+            st.session_state.example_prompt = 'What is the average engagement for tweets about clinical trials?'
+            st.rerun()
+
+        st.subheader("Tweet Generation")
+
+        if st.button("Tweet about sleep issues among those with Parkinson's Disease", use_container_width=True):
+            st.session_state.example_prompt = "Write an informational tweet about how 90 percent of people with Parkinson's Disease have trouble sleeping"
+            st.rerun()
+
+        if st.button("Tweet about new White House agreement for accessibility and affordability", use_container_width=True):
+            st.session_state.example_prompt = "Create a tweet about an agreement with the White House about increasing access and affordability in healthcare in the US."
+            st.rerun()
+
+        st.subheader("Press Release Generation")
+
+        if st.button("Clinical trial results", use_container_width=True):
+            st.session_state.example_prompt = "Write a press release announcing positive Phase 3 clinical trial results for an oncology therapeutic"
+            st.rerun()
+
+        if st.button("Research Partnership", use_container_width=True):
+            st.session_state.example_prompt = "Write a press release about a new research partnership with an aesthetics company to evaluate the long-term effects of using Botox as a preventative anti-aging treatment"
+            st.rerun()
+
+        st.markdown("---")
+
+        if st.button('Clear Chat', use_container_width=True):
             st.session_state.message = []
+            if 'example_prompt' in st.session_state:
+                del st.session_state.example_prompt
             st.rerun()
 
 if __name__ == '__main__':

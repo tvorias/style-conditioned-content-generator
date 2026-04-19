@@ -52,7 +52,7 @@ The system intelligently routes user requests based on detected intent, providin
 - Loads high-engagement tweets from ChromaDB as reference examples
 - Generates comparison scores and recommendations
 
-### 3. revised_app.py
+### 4. revised_app.py
 **Purpose:** The primary Streamlit chatbot interface combining semantic search and SQL query generation.
 
 ## Detailed Functionality
